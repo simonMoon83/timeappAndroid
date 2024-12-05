@@ -13,7 +13,7 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   List<int> _timePresets = [15 * 60, 30 * 60, 45 * 60, 60 * 60];
-  List<String> _soundPresets = ['alarm1', 'alarm1', 'alarm1', 'alarm1'];
+  List<String> _soundPresets = ['sounds/alarm1.mp3', 'sounds/alarm1.mp3', 'sounds/alarm1.mp3', 'sounds/alarm1.mp3'];
   List<int> _selectedMinutes = List.filled(4, 0);
   List<int> _selectedSeconds = List.filled(4, 0);
   late SharedPreferences _prefs;
@@ -21,10 +21,10 @@ class _SettingsPageState extends State<SettingsPage> {
   List<bool> _isPlayingList = List.filled(4, false);
 
   final List<String> _availableSounds = [
-    'alarm1',
-    'alarm2',
-    'alarm3',
-    'alarm4',
+    'assets/sounds/alarm1.mp3',
+    'assets/sounds/alarm2.mp3',
+    'assets/sounds/alarm3.mp3',
+    'assets/sounds/alarm4.mp3',
   ];
 
   @override
@@ -53,11 +53,11 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() {
       _timePresets = _prefs.getStringList('timePresets')?.map(int.parse).toList() ?? 
           [15 * 60, 30 * 60, 45 * 60, 60 * 60];
-      _soundPresets = _prefs.getStringList('soundPresets') ?? List.filled(4, 'alarm1');
+      _soundPresets = _prefs.getStringList('soundPresets') ?? List.filled(4, 'assets/sounds/alarm1.mp3');
       
       for (int i = 0; i < _soundPresets.length; i++) {
         if (!_availableSounds.contains(_soundPresets[i])) {
-          _soundPresets[i] = 'alarm1';
+          _soundPresets[i] = 'assets/sounds/alarm1.mp3';
         }
       }
       
@@ -71,14 +71,16 @@ class _SettingsPageState extends State<SettingsPage> {
 
   void _resetToDefaults() {
     setState(() {
-      _timePresets = [5, 10, 15, 20];
-      _soundPresets = List.filled(4, 'alarm1');
+      _timePresets = [15 * 60, 30 * 60, 45 * 60, 60 * 60];
+      _soundPresets = List.filled(4, 'assets/sounds/alarm1.mp3');
 
       for (int i = 0; i < _timePresets.length; i++) {
-        _selectedMinutes[i] = 0;
-        _selectedSeconds[i] = _timePresets[i];
+        int totalSeconds = _timePresets[i];
+        _selectedMinutes[i] = totalSeconds ~/ 60;
+        _selectedSeconds[i] = totalSeconds % 60;
       }
     });
+    _savePresets();  // 리셋된 값을 저장
   }
 
   Future<void> _savePresets() async {
@@ -103,7 +105,15 @@ class _SettingsPageState extends State<SettingsPage> {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('설정이 저장되었습니다.'),
+            content: Center(
+              child: Text(
+                '설정이 저장되었습니다.',
+                style: TextStyle(
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+            ),
             duration: Duration(seconds: 2),
             backgroundColor: Colors.blue,
           ),
@@ -146,7 +156,9 @@ class _SettingsPageState extends State<SettingsPage> {
           _isPlayingList[index] = false;
         });
       } else {
-        await _audioPlayer.play(AssetSource('sounds/$sound.mp3'));
+        // Remove 'assets/' if it exists in the path
+        String cleanPath = sound.startsWith('assets/') ? sound.substring(7) : sound;
+        await _audioPlayer.play(AssetSource(cleanPath));
         setState(() {
           _isPlayingList[index] = true;
         });
@@ -165,9 +177,8 @@ class _SettingsPageState extends State<SettingsPage> {
           child: Container(
             margin: const EdgeInsets.symmetric(horizontal: 4),
             child: Platform.isIOS
-                ? CupertinoPicker(
-                    backgroundColor: Colors.transparent,
-                    itemExtent: 32.0,
+                ? CupertinoPicker.builder(
+                    itemExtent: 32,
                     scrollController: FixedExtentScrollController(
                       initialItem: _selectedMinutes[index],
                     ),
@@ -176,14 +187,15 @@ class _SettingsPageState extends State<SettingsPage> {
                         _selectedMinutes[index] = value;
                       });
                     },
-                    children: List<Widget>.generate(60, (int index) {
+                    itemBuilder: (context, index) {
                       return Center(
                         child: Text(
-                          '$index',
+                          index.toString(),
                           style: const TextStyle(color: Colors.white),
                         ),
                       );
-                    }),
+                    },
+                    childCount: 60,
                   )
                 : DropdownButtonFormField<int>(
                     decoration: const InputDecoration(
@@ -192,7 +204,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       contentPadding:
                           EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                     ),
-                    value: _selectedMinutes[index],
+                    value: _selectedMinutes[index].clamp(0, 59),  
                     items: List.generate(
                       60,
                       (i) => DropdownMenuItem(
@@ -201,9 +213,11 @@ class _SettingsPageState extends State<SettingsPage> {
                       ),
                     ),
                     onChanged: (value) {
-                      setState(() {
-                        _selectedMinutes[index] = value!;
-                      });
+                      if (value != null) {
+                        setState(() {
+                          _selectedMinutes[index] = value;
+                        });
+                      }
                     },
                   ),
           ),
@@ -221,9 +235,8 @@ class _SettingsPageState extends State<SettingsPage> {
           child: Container(
             margin: const EdgeInsets.symmetric(horizontal: 4),
             child: Platform.isIOS
-                ? CupertinoPicker(
-                    backgroundColor: Colors.transparent,
-                    itemExtent: 32.0,
+                ? CupertinoPicker.builder(
+                    itemExtent: 32,
                     scrollController: FixedExtentScrollController(
                       initialItem: _selectedSeconds[index],
                     ),
@@ -232,14 +245,15 @@ class _SettingsPageState extends State<SettingsPage> {
                         _selectedSeconds[index] = value;
                       });
                     },
-                    children: List<Widget>.generate(60, (int index) {
+                    itemBuilder: (context, index) {
                       return Center(
                         child: Text(
-                          '$index',
+                          index.toString(),
                           style: const TextStyle(color: Colors.white),
                         ),
                       );
-                    }),
+                    },
+                    childCount: 60,
                   )
                 : DropdownButtonFormField<int>(
                     decoration: const InputDecoration(
@@ -248,7 +262,7 @@ class _SettingsPageState extends State<SettingsPage> {
                       contentPadding:
                           EdgeInsets.symmetric(horizontal: 10, vertical: 8),
                     ),
-                    value: _selectedSeconds[index],
+                    value: _selectedSeconds[index].clamp(0, 59),  
                     items: List.generate(
                       60,
                       (i) => DropdownMenuItem(
@@ -257,9 +271,11 @@ class _SettingsPageState extends State<SettingsPage> {
                       ),
                     ),
                     onChanged: (value) {
-                      setState(() {
-                        _selectedSeconds[index] = value!;
-                      });
+                      if (value != null) {
+                        setState(() {
+                          _selectedSeconds[index] = value;
+                        });
+                      }
                     },
                   ),
           ),
@@ -297,7 +313,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     children: _availableSounds.map((sound) {
                       return Center(
                         child: Text(
-                          sound,
+                          sound.split('/').last.split('.').first,
                           style: const TextStyle(color: Colors.white),
                         ),
                       );
@@ -316,7 +332,7 @@ class _SettingsPageState extends State<SettingsPage> {
                     items: _availableSounds.map((String value) {
                       return DropdownMenuItem<String>(
                         value: value,
-                        child: Text(value),
+                        child: Text(value.split('/').last.split('.').first),
                       );
                     }).toList(),
                     onChanged: (String? newValue) {

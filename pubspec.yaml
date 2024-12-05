@@ -17,7 +17,7 @@ dependencies:
   shared_preferences: ^2.1.0
   audioplayers: ^5.2.1
   logging: ^1.2.0
-
+  permission_handler: ^10.4.3
 
 dev_dependencies:
   flutter_test:
@@ -28,9 +28,12 @@ dev_dependencies:
 flutter:
   uses-material-design: true
   assets:
+    - assets/sounds/alarm1.mp3
+    - assets/sounds/alarm2.mp3
+    - assets/sounds/alarm3.mp3
+    - assets/sounds/alarm4.mp3
     - assets/alarm/alarm.mp3
     - assets/sounds/
-    
 
 flutter_launcher_icons:
   android: true

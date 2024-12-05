@@ -1,35 +1,64 @@
 import 'dart:async';
 import 'dart:ui';
-import 'dart:math'; // Add this line
-import 'settings_page.dart'; // 이 줄을 추가
+import 'dart:math';
+import 'settings_page.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_background_service/flutter_background_service.dart';
+import 'package:flutter_background_service_android/flutter_background_service_android.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:audioplayers/audioplayers.dart';
 import 'package:logging/logging.dart';
+import 'package:permission_handler/permission_handler.dart';
 
 final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
     FlutterLocalNotificationsPlugin();
 
+@pragma('vm:entry-point')
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
+
+  // Request permissions before initializing services
+  await [
+    Permission.notification,
+    Permission.storage,
+  ].request();
+
   await initializeService();
   await initializeNotifications();
   runApp(const MyApp());
 }
 
+@pragma('vm:entry-point')
 Future<void> initializeService() async {
   final service = FlutterBackgroundService();
+
+  // Create notification channel
+  const AndroidNotificationChannel channel = AndroidNotificationChannel(
+    'timer_channel',
+    'Timer Service',
+    description: 'Timer app background service',
+    importance: Importance.high,
+    playSound: false,
+    enableVibration: true,
+    showBadge: true,
+    enableLights: true,
+  );
+
+  final FlutterLocalNotificationsPlugin flutterLocalNotificationsPlugin =
+      FlutterLocalNotificationsPlugin();
+
+  await flutterLocalNotificationsPlugin
+      .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(channel);
+
   await service.configure(
     androidConfiguration: AndroidConfiguration(
       onStart: onStart,
       autoStart: true,
-      isForegroundMode: false, // 포그라운드 모드 비활성화
+      isForegroundMode: false,
       notificationChannelId: 'timer_channel',
-      initialNotificationTitle: 'Timer App',
-      initialNotificationContent: 'Running in background',
-      foregroundServiceNotificationId: 888,
     ),
     iosConfiguration: IosConfiguration(
       autoStart: true,
@@ -37,10 +66,27 @@ Future<void> initializeService() async {
       onBackground: onIosBackground,
     ),
   );
+
   await service.startService();
 }
 
 Future<void> initializeNotifications() async {
+  const AndroidNotificationChannel channel = AndroidNotificationChannel(
+    'timer_channel',
+    'Timer Notifications',
+    description: 'Timer completion notifications',
+    importance: Importance.max,
+    playSound: false,
+    enableVibration: true,
+    showBadge: true,
+    enableLights: true,
+  );
+
+  await flutterLocalNotificationsPlugin
+      .resolvePlatformSpecificImplementation<
+          AndroidFlutterLocalNotificationsPlugin>()
+      ?.createNotificationChannel(channel);
+
   const AndroidInitializationSettings initializationSettingsAndroid =
       AndroidInitializationSettings('@mipmap/ic_launcher');
 
@@ -52,14 +98,7 @@ Future<void> initializeNotifications() async {
     initializationSettings,
     onDidReceiveNotificationResponse:
         (NotificationResponse notificationResponse) async {
-      if (notificationResponse.notificationResponseType ==
-              NotificationResponseType.selectedNotificationAction &&
-          notificationResponse.actionId == 'stop_alarm') {
-        // 알림음 중지
-        await AlarmPlayer().stopAlarm();
-        // 알림 제거
-        await flutterLocalNotificationsPlugin.cancel(0);
-      }
+      // 노티피케이션 응답 핸들러 제거 - 알람을 자동으로 중지하지 않도록 함
     },
   );
 }
@@ -70,18 +109,133 @@ Future<bool> onIosBackground(ServiceInstance service) async {
 }
 
 @pragma('vm:entry-point')
-void onStart(ServiceInstance service) {
+Future<void> onStart(ServiceInstance service) async {
   DartPluginRegistrant.ensureInitialized();
+  
+  final alarmPlayer = AlarmPlayer();
+  alarmPlayer.initialize();
 
-  // 서비스가 포그라운드로 전환되는 부분 제거
+  Timer? backgroundTimer;
+
+  service.on('startTimer').listen((event) {
+    if (event != null) {
+      final duration = event['duration'] as int;
+      if (duration > 0) {
+        // 기존 타이머가 있다면 취소
+        backgroundTimer?.cancel();
+        
+        // 새로운 타이머 시작
+        backgroundTimer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+          if (duration <= 0) {
+            timer.cancel();
+            String soundPath = event['sound'] as String? ?? 'sounds/alarm1.mp3';
+            // Extract only the filename if a full path is provided
+            String cleanPath = soundPath.split('/').last;
+            if (!cleanPath.endsWith('.mp3')) {
+              cleanPath = 'sounds/$cleanPath.mp3';
+            } else if (!soundPath.startsWith('sounds/')) {
+              cleanPath = 'sounds/$cleanPath';
+            } else {
+              cleanPath = soundPath;
+            }
+            print('Playing sound with path: $cleanPath'); // Debug log
+            await alarmPlayer.playAlarm(cleanPath);
+            
+            // 타이머 완료 시 알림 표시
+            await flutterLocalNotificationsPlugin.show(
+              0,
+              '타이머 종료',
+              '타이머가 완료되었습니다.',
+              NotificationDetails(
+                android: AndroidNotificationDetails(
+                  'timer_notification',
+                  'Timer Notifications',
+                  channelDescription: 'Notification channel for timer',
+                  importance: Importance.max,
+                  priority: Priority.high,
+                  playSound: false,
+                  enableVibration: true,
+                  ongoing: true,
+                  autoCancel: false,
+                ),
+              ),
+            );
+          }
+        });
+      }
+    }
+  });
+
+  service.on('stopAlarm').listen((event) async {
+    backgroundTimer?.cancel();
+    await alarmPlayer.stopAlarm();
+    await flutterLocalNotificationsPlugin.cancel(0);
+  });
+
   service.on('stopService').listen((event) {
+    backgroundTimer?.cancel();
     service.stopSelf();
   });
+}
 
-  Timer.periodic(const Duration(seconds: 1), (timer) async {
-    // 백그라운드에서 타이머 로직 구현
-    // 필요에 따라 알림을 설정할 수 있습니다.
-  });
+class AlarmPlayer {
+  static final AlarmPlayer _instance = AlarmPlayer._internal();
+  factory AlarmPlayer() => _instance;
+  AlarmPlayer._internal();
+
+  final AudioPlayer _audioPlayer = AudioPlayer();
+  bool _isAlarmPlaying = false;
+  bool _isInitialized = false;
+
+  Future<void> initialize() async {
+    if (!_isInitialized) {
+      await _audioPlayer.setVolume(1.0);
+      await _audioPlayer.setReleaseMode(ReleaseMode.loop);
+      _isInitialized = true;
+    }
+  }
+
+  Future<void> playAlarm(String soundFile) async {
+    if (!_isInitialized) {
+      await initialize();
+    }
+    if (!_isAlarmPlaying) {
+      try {
+        print('Original soundFile path: $soundFile');
+        // Remove 'assets/' if it exists in the path
+        String cleanPath = soundFile.startsWith('assets/') ? soundFile.substring(7) : soundFile;
+        print('Cleaned path: $cleanPath');
+        
+        // Extract just the filename for debugging
+        String filename = cleanPath.split('/').last;
+        print('Attempting to play file: $filename');
+        
+        await _audioPlayer.setSource(AssetSource(cleanPath));
+        await _audioPlayer.resume();
+        _isAlarmPlaying = true;
+        print('Successfully started playing: $cleanPath');
+      } catch (e) {
+        print('Error playing alarm: $e');
+        print('Failed to play file: $soundFile');
+      }
+    }
+  }
+
+  Future<void> stopAlarm() async {
+    if (_isAlarmPlaying) {
+      try {
+        print('Stopping alarm...');
+        await _audioPlayer.pause();
+        await _audioPlayer.seek(Duration.zero);
+        _isAlarmPlaying = false;
+        print('Alarm stopped successfully');
+      } catch (e) {
+        print('Error stopping alarm: $e');
+      }
+    }
+  }
+
+  bool get isAlarmPlaying => _isAlarmPlaying;
 }
 
 class MyApp extends StatelessWidget {
@@ -102,44 +256,6 @@ class MyApp extends StatelessWidget {
   }
 }
 
-class AlarmPlayer {
-  static final AlarmPlayer _instance = AlarmPlayer._internal();
-  factory AlarmPlayer() => _instance;
-  AlarmPlayer._internal();
-
-  final AudioPlayer _audioPlayer = AudioPlayer();
-  bool _isAlarmPlaying = false;
-  String _currentSound = 'alarm1'; // 기본값
-
-  Future<void> initialize() async {
-    await _audioPlayer.setVolume(1.0);
-    await _audioPlayer.setReleaseMode(ReleaseMode.loop);
-  }
-
-  Future<void> playAlarm([String? sound]) async {
-    if (!_isAlarmPlaying) {
-      if (sound != null) {
-        _currentSound = sound;
-      }
-      await _audioPlayer.play(AssetSource('sounds/$_currentSound.mp3'));
-      _isAlarmPlaying = true;
-    }
-  }
-
-  Future<void> stopAlarm() async {
-    if (_isAlarmPlaying) {
-      await _audioPlayer.stop();
-      _isAlarmPlaying = false;
-    }
-  }
-
-  void setSound(String sound) {
-    _currentSound = sound;
-  }
-
-  bool get isAlarmPlaying => _isAlarmPlaying;
-}
-
 class TimerPage extends StatefulWidget {
   const TimerPage({Key? key}) : super(key: key);
 
@@ -154,24 +270,92 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
   bool _isRunning = false;
   late SharedPreferences _prefs;
   List<int> _timePresets = [15, 30, 45, 60];
-  List<String> _soundPresets = ['alarm1', 'alarm2', 'alarm3', 'alarm4'];
-  int _currentPresetIndex = 0; // 현재 선택된 프리셋 인덱스
+  List<String> _soundPresets = [
+    'sounds/alarm1.mp3',
+    'sounds/alarm2.mp3',
+    'sounds/alarm3.mp3',
+    'sounds/alarm4.mp3'
+  ];
+  int _currentPresetIndex = 0;
+  bool _isDialogShowing = false;
+
+  void _closeDialog(BuildContext dialogContext) {
+    Navigator.of(dialogContext).pop();  // Use the dialog's context to pop
+    setState(() {
+      _isDialogShowing = false;
+    });
+  }
+
+  Future<bool> _stopAlarmAndNotification() async {
+    if (!_isRunning) return true; // Prevent repeated stopping
+    final service = FlutterBackgroundService();
+    service.invoke('stopAlarm', {});  // Remove await since invoke returns void
+    await flutterLocalNotificationsPlugin.cancelAll();
+    AlarmPlayer().stopAlarm();
+    _isRunning = false; // Ensure running state is false
+    print('Alarm and notifications stopped'); // Debug log
+    return true; // Allow pop
+  }
 
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addObserver(this);
     _initPrefs();
+    WidgetsBinding.instance.addObserver(this);
     _setupNotificationChannel();
-    AlarmPlayer().initialize();
+
+    print('Current sound presets: $_soundPresets'); // 디버그 로그 추가
+
+    // 백그라운드 서비스의 시간 업데이트 수신
+    FlutterBackgroundService().on('updateTime').listen((event) {
+      if (!mounted) return;
+      if (event != null && event['timeInSeconds'] != null) {
+        setState(() {
+          _timeInSeconds = int.parse(event['timeInSeconds'].toString());
+          _saveState();
+        });
+      }
+    });
+
+    // 타이머 종료 이벤트 수신
+    FlutterBackgroundService().on('timerCompleted').listen((event) async {
+      if (!mounted) return;
+      await _checkAndShowStopAlarmDialog();
+    });
   }
 
   @override
   void dispose() {
-    AlarmPlayer().stopAlarm();
     WidgetsBinding.instance.removeObserver(this);
     _timer?.cancel();
+    AlarmPlayer().stopAlarm();
+    final service = FlutterBackgroundService();
+    service.invoke('stopAlarm', {});
     super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.paused) {
+      // 백그라운드로 갈 때는 상태만 저장
+      _saveState();
+      
+      // 타이머가 실행 중이면 백그라운드 서비스 시작
+      if (_isRunning) {
+        final service = FlutterBackgroundService();
+        String soundPath = _soundPresets[_currentPresetIndex];
+        print('Starting timer with sound: $soundPath'); // Debug log
+        service.invoke(
+          'startTimer',
+          {
+            'duration': _timeInSeconds,
+            'sound': soundPath,
+          },
+        );
+      }
+    } else if (state == AppLifecycleState.resumed) {
+      _loadSavedState();
+    }
   }
 
   Future<void> _initPrefs() async {
@@ -186,16 +370,72 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
           _prefs.getStringList('timePresets')?.map(int.parse).toList() ??
               [15, 30, 45, 60];
       _soundPresets =
-          _prefs.getStringList('soundPresets') ?? List.filled(4, 'alarm1');
+          _prefs.getStringList('soundPresets') ?? List.filled(4, 'sounds/alarm1.mp3');
     });
   }
 
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.paused) {
-      _saveState();
-    } else if (state == AppLifecycleState.resumed) {
-      _loadSavedState();
+  Future<void> _checkAndShowStopAlarmDialog() async {
+    if (!mounted || _isDialogShowing) {
+      print('Dialog is already showing or widget not mounted');
+      return;
+    }
+
+    setState(() {
+      _isDialogShowing = true;
+    });
+
+    try {
+      Navigator.of(context).popUntil((route) => route.isFirst);
+
+      if (!mounted) return;  // Check mounted again after potential route changes
+
+      await showDialog(
+        context: context,
+        barrierDismissible: false,
+        builder: (BuildContext dialogContext) {
+          return WillPopScope(
+            onWillPop: () async {
+              return await _stopAlarmAndNotification();  // Use await to get the boolean return value
+            },
+            child: AlertDialog(
+              title: const Text('타이머 종료'),
+              content: const Text('타이머가 완료되었습니다.\n알람을 종료하시겠습니까?'),
+              actions: <Widget>[
+                TextButton(
+                  child: const Text('종료'),
+                  onPressed: () async {
+                    await _stopAlarmAndNotification();
+                    if (mounted && _isDialogShowing) {  // Check both mounted and dialog state
+                      _closeDialog(dialogContext);
+                    }
+                  },
+                ),
+              ],
+            ),
+          );
+        },
+      ).whenComplete(() {
+        if (mounted) {
+          setState(() {
+            _isDialogShowing = false;
+          });
+        }
+      });
+    } catch (e) {
+      print('Error showing dialog: $e');
+      if (mounted) {
+        setState(() {
+          _isDialogShowing = false;
+        });
+      }
+    }
+  }
+
+  Future<void> _repeatAlarmAndNotification() async {
+    while (true) { // 지속적으로 반복
+      if (!_isRunning) break; // 타이머가 중지되면 반복 종료
+      await _showNotification('타이머 완료', '타이머가 완료되었습니다. 알람이 반복됩니다.');
+      await Future.delayed(Duration(minutes: 1)); // 1분마다 알람 반복
     }
   }
 
@@ -219,31 +459,85 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
   }
 
   void _startTimer() {
-    if (!_isRunning) {
-      _timeInSeconds = _timeInSeconds > 0 ? _timeInSeconds : _selectedTime;
-      _isRunning = true;
-      _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-        setState(() {
-          if (_timeInSeconds > 0) {
-            _timeInSeconds--;
-            _saveState();
-          } else {
-            _stopTimer();
-            _showNotification('타이머 종료', '타이머가 완료되었습니다.');
-          }
-        });
+    if (_isRunning) return; // Prevent repeated starting
+    _timeInSeconds = _timeInSeconds > 0 ? _timeInSeconds : _selectedTime;
+    _isRunning = true;
+    _saveState();
+
+    final service = FlutterBackgroundService();
+    String soundPath = _soundPresets[_currentPresetIndex];
+    print('Starting timer with sound: $soundPath'); // Debug log
+    service.invoke(
+      'startTimer',
+      {
+        'duration': _timeInSeconds,
+        'sound': soundPath,
+      },
+    );
+
+    _timer = Timer.periodic(const Duration(seconds: 1), (timer) async {
+      if (!mounted) return;
+      setState(() {
+        if (_timeInSeconds > 0) {
+          _timeInSeconds--;
+          _saveState();
+        } else {
+          _repeatAlarmAndNotification(); // 타이머 완료 시 알람 반복
+          _stopTimer();
+        }
       });
-    }
+    });
   }
 
-  void _stopTimer() async {
+  Future<void> _stopTimer() async {
     setState(() {
       _timer?.cancel();
       _isRunning = false;
       _saveState();
     });
-    await AlarmPlayer().stopAlarm();
-    await flutterLocalNotificationsPlugin.cancel(0);
+
+    await _showStopAlarmDialog();
+  }
+
+  Future<void> _showStopAlarmDialog() async {
+    return showDialog(
+      context: context,
+      barrierDismissible: false,
+      builder: (BuildContext context) {
+        return WillPopScope(
+          onWillPop: () async => false,  // 뒤로 가기 버튼 비활성화
+          child: AlertDialog(
+            title: const Text('타이머 종료'),
+            content: const Text('타이머가 완료되었습니다.\n알람을 종료하시겠습니까?'),
+            actions: <Widget>[
+              TextButton(
+                child: const Text('종료'),
+                onPressed: () async {
+                  try {
+                    // 백그라운드 서비스에 알람 중지 요청
+                    final service = FlutterBackgroundService();
+                    service.invoke('stopAlarm', {});
+                    
+                    // 알람 중지
+                    await AlarmPlayer().stopAlarm();
+                    
+                    // 알림 제거
+                    await flutterLocalNotificationsPlugin.cancel(0);
+                    
+                    // 다이얼로그 닫기
+                    if (mounted) {
+                      Navigator.of(context).pop();
+                    }
+                  } catch (e) {
+                    print('Error stopping alarm: $e');
+                  }
+                },
+              ),
+            ],
+          ),
+        );
+      },
+    );
   }
 
   void _resetTimer() {
@@ -263,7 +557,7 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
         _timeInSeconds = _selectedTime;
       } else {
         _timeInSeconds += seconds;
-        _selectedTime = _timeInSeconds; // 시간이 추가될 때 selectedTime도 업데이트
+        _selectedTime = _timeInSeconds;
       }
       _saveState();
     });
@@ -319,6 +613,9 @@ class _TimerPageState extends State<TimerPage> with WidgetsBindingObserver {
       description: 'Notification channel for timer',
       importance: Importance.max,
       playSound: false,
+      enableVibration: true,
+      showBadge: true,
+      enableLights: true,
     );
 
     await flutterLocalNotificationsPlugin
