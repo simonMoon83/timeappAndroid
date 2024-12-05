@@ -13,7 +13,12 @@ class SettingsPage extends StatefulWidget {
 
 class _SettingsPageState extends State<SettingsPage> {
   List<int> _timePresets = [15 * 60, 30 * 60, 45 * 60, 60 * 60];
-  List<String> _soundPresets = ['sounds/alarm1.mp3', 'sounds/alarm1.mp3', 'sounds/alarm1.mp3', 'sounds/alarm1.mp3'];
+  List<String> _soundPresets = [
+    'sounds/alarm1.mp3',
+    'sounds/alarm2.mp3',
+    'sounds/alarm3.mp3',
+    'sounds/alarm4.mp3'
+  ];
   List<int> _selectedMinutes = List.filled(4, 0);
   List<int> _selectedSeconds = List.filled(4, 0);
   late SharedPreferences _prefs;
@@ -21,10 +26,10 @@ class _SettingsPageState extends State<SettingsPage> {
   List<bool> _isPlayingList = List.filled(4, false);
 
   final List<String> _availableSounds = [
-    'assets/sounds/alarm1.mp3',
-    'assets/sounds/alarm2.mp3',
-    'assets/sounds/alarm3.mp3',
-    'assets/sounds/alarm4.mp3',
+    'sounds/alarm1.mp3',
+    'sounds/alarm2.mp3',
+    'sounds/alarm3.mp3',
+    'sounds/alarm4.mp3',
   ];
 
   @override
@@ -53,11 +58,11 @@ class _SettingsPageState extends State<SettingsPage> {
     setState(() {
       _timePresets = _prefs.getStringList('timePresets')?.map(int.parse).toList() ?? 
           [15 * 60, 30 * 60, 45 * 60, 60 * 60];
-      _soundPresets = _prefs.getStringList('soundPresets') ?? List.filled(4, 'assets/sounds/alarm1.mp3');
+      _soundPresets = _prefs.getStringList('soundPresets') ?? List.filled(4, 'sounds/alarm1.mp3');
       
       for (int i = 0; i < _soundPresets.length; i++) {
         if (!_availableSounds.contains(_soundPresets[i])) {
-          _soundPresets[i] = 'assets/sounds/alarm1.mp3';
+          _soundPresets[i] = 'sounds/alarm1.mp3';
         }
       }
       
@@ -72,7 +77,7 @@ class _SettingsPageState extends State<SettingsPage> {
   void _resetToDefaults() {
     setState(() {
       _timePresets = [15 * 60, 30 * 60, 45 * 60, 60 * 60];
-      _soundPresets = List.filled(4, 'assets/sounds/alarm1.mp3');
+      _soundPresets = List.filled(4, 'sounds/alarm1.mp3');
 
       for (int i = 0; i < _timePresets.length; i++) {
         int totalSeconds = _timePresets[i];
@@ -156,9 +161,10 @@ class _SettingsPageState extends State<SettingsPage> {
           _isPlayingList[index] = false;
         });
       } else {
-        // Remove 'assets/' if it exists in the path
-        String cleanPath = sound.startsWith('assets/') ? sound.substring(7) : sound;
-        await _audioPlayer.play(AssetSource(cleanPath));
+        // Add 'assets/' prefix for AudioPlayer
+        String assetPath = 'assets/$sound';
+        print('Playing sound: $assetPath');
+        await _audioPlayer.play(AssetSource(sound));
         setState(() {
           _isPlayingList[index] = true;
         });
