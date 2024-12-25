@@ -1,5 +1,5 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    package="com.example.timerapp"
+    package="com.deepintocoder.easy_timer"
     xmlns:tools="http://schemas.android.com/tools">
 
 <!-- 권한 추가 -->
@@ -17,7 +17,7 @@
 
 
     <application
-        android:label="timerapp"
+        android:label="Easy Timer"
         android:name="${applicationName}"
         android:icon="@mipmap/ic_launcher"
         android:enableOnBackInvokedCallback="true">
